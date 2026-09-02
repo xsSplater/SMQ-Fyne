@@ -19,6 +19,8 @@ type BaseWidget struct {
 
 	impl       fyne.Widget
 	themeCache fyne.Theme
+
+	toolTipText string // Попытка сделать нормальный тултип
 }
 
 // ExtendBaseWidget is used by an extending widget to make use of BaseWidget functionality.
@@ -224,3 +226,10 @@ type noCopy struct{}
 func (*noCopy) Lock() {}
 
 func (*noCopy) Unlock() {}
+
+func (bw *BaseWidget) SetToolTip(text string) {
+	bw.toolTipText = text
+}
+func (bw *BaseWidget) ToolTip() string {
+	return bw.toolTipText
+}

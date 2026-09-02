@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/internal/driver"
 	"fyne.io/fyne/v2/internal/driver/common"
 	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/tooltip"
 )
 
 // Declare conformity with Canvas interface
@@ -36,6 +37,9 @@ type glCanvas struct {
 
 	context         driver.WithContext
 	webExtraWindows *container.MultipleWindows
+
+	// Менеджер тултипов
+	tooltipManager *tooltip.Manager
 }
 
 func (c *glCanvas) Capture() image.Image {
@@ -135,7 +139,7 @@ func (c *glCanvas) Scale() float32 {
 }
 
 func (c *glCanvas) SetContent(content fyne.CanvasObject) {
-	newSize := c.size.Max(c.canvasSize(content.MinSize()))
+	newSize := internal.MaxSizes(c.size, c.canvasSize(content.MinSize()))
 
 	c.setContent(content)
 
@@ -303,5 +307,21 @@ func newCanvas() *glCanvas {
 	connectKeyboard(c)
 	c.Initialize(c, c.overlayChanged)
 	c.setContent(&canvas.Rectangle{FillColor: theme.Color(theme.ColorNameBackground)})
+
+	// Инициализируем менеджер тултипов
+	c.tooltipManager = tooltip.NewManager(c)
+
 	return c
+}
+
+// TooltipManager возвращает менеджер тултипов этого канваса.
+func (c *glCanvas) TooltipManager() *tooltip.Manager {
+	return c.tooltipManager
+}
+
+// SetTooltipStyle устанавливает стиль для всех тултипов этого канваса.
+func (c *glCanvas) SetTooltipStyle(s tooltip.Style) {
+	if c.tooltipManager != nil {
+		c.tooltipManager.SetStyle(s)
+	}
 }

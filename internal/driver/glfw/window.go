@@ -6,12 +6,14 @@ import (
 	_ "image/png" // for the icon
 	"math"
 	"runtime"
+	"slices"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/internal"
 	"fyne.io/fyne/v2/internal/app"
 	"fyne.io/fyne/v2/internal/async"
 	"fyne.io/fyne/v2/internal/build"
@@ -23,7 +25,7 @@ import (
 
 const (
 	dragMoveThreshold = 2 // how far can we move before it is a drag
-	windowIconSize    = 256
+	windowIconSize	  = 256
 )
 
 func (w *window) Title() string {
@@ -56,7 +58,7 @@ func (w *window) screenSize(canvasSize fyne.Size) (int, int) {
 func (w *window) Resize(size fyne.Size) {
 	w.canvas.Resize(size)
 	// we cannot perform this until window is prepared as we don't know its scale!
-	bigEnough := size.Max(w.canvas.canvasSize(w.canvas.Content().MinSize()))
+	bigEnough := internal.MaxSizes(size, w.canvas.canvasSize(w.canvas.Content().MinSize()))
 	w.runOnMainWhenCreated(func() {
 		width, height := scale.ToScreenCoordinate(w.canvas, bigEnough.Width), scale.ToScreenCoordinate(w.canvas, bigEnough.Height)
 		if w.fixedSize || !w.visible { // fixed size ignores future `resized` and if not visible we may not get the event
@@ -393,6 +395,18 @@ func (w *window) processMouseMoved(xpos float64, ypos float64) {
 		ev.AbsolutePosition = mousePos
 		ev.Position = pos
 
+		// === НОВОЕ: проверка тултипа через анонимный интерфейс ===
+		if tootiper, ok := obj.(interface{ ToolTip() string }); ok {
+			if tip := tootiper.ToolTip(); tip != "" {
+				if wid, ok := obj.(fyne.Widget); ok {
+					w.canvas.TooltipManager().Show(wid, tip, mousePos)
+				}
+			} else {
+				w.canvas.TooltipManager().Hide()
+			}
+		}
+		// ========================================================
+
 		if hovered, ok := obj.(desktop.Hoverable); ok {
 			if hovered == mouseOver {
 				hovered.MouseMoved(ev)
@@ -416,6 +430,8 @@ func (w *window) processMouseMoved(xpos float64, ypos float64) {
 		}
 	} else if mouseOver != nil && !w.objIsDragged(mouseOver) {
 		w.mouseOut()
+		// === НОВОЕ: скрываем тултип при уходе мыши ===
+		w.canvas.TooltipManager().Hide()
 	}
 
 	mouseDragged := w.mouseDragged
@@ -456,10 +472,19 @@ func (w *window) mouseOut() {
 	if mouseOver != nil {
 		mouseOver.MouseOut()
 		w.mouseOver = nil
+		// === НОВОЕ: скрываем тултип ===
+		w.canvas.TooltipManager().Hide()
 	}
 }
 
 func (w *window) processMouseClicked(button desktop.MouseButton, action action, modifiers fyne.KeyModifier) {
+	// Скрываем тултип при любом клике
+	if w.canvas.TooltipManager() != nil {
+		w.canvas.TooltipManager().Hide()
+	}
+
+	w.ensurePositionProcessed()
+
 	w.mouseDragPos = w.mousePos
 	mousePos := w.mousePos
 	mouseDragStarted := w.mouseDragStarted
@@ -482,14 +507,14 @@ func (w *window) processMouseClicked(button desktop.MouseButton, action action, 
 		return false
 	})
 	ev := &fyne.PointEvent{
-		Position:         pos,
+		Position:		  pos,
 		AbsolutePosition: mousePos,
 	}
 
 	coMouse := co
 	if wid, ok := co.(desktop.Mouseable); ok {
 		mev := &desktop.MouseEvent{
-			Button:   button,
+			Button:	  button,
 			Modifier: modifiers,
 		}
 		mev.Position = ev.Position
@@ -497,19 +522,17 @@ func (w *window) processMouseClicked(button desktop.MouseButton, action action, 
 		w.mouseClickedHandleMouseable(mev, action, wid)
 	}
 
-	if wid, ok := co.(fyne.Focusable); !ok || wid != w.canvas.Focused() {
+	focused := w.canvas.Focused()
+	if wid, ok := co.(fyne.Focusable); !ok || wid != focused {
 		ignore := false
-		_, _, _ = w.findObjectAtPositionMatching(w.canvas, mousePos, func(object fyne.CanvasObject) bool {
-			switch object.(type) {
-			case fyne.Focusable:
-				ignore = true
-				return true
-			}
+		if focusedObj, ok := focused.(fyne.CanvasObject); ok {
+			found, _, _ := w.findObjectAtPositionMatching(w.canvas, mousePos, func(object fyne.CanvasObject) bool {
+				return object == focusedObj
+			})
+			ignore = found != nil
+		}
 
-			return false
-		})
-
-		if !ignore { // if a parent item under the mouse has focus then ignore this tap unfocus
+		if !ignore { // if the currently focused widget is under the mouse then ignore this tap unfocus
 			w.canvas.Unfocus()
 		}
 	}
@@ -549,8 +572,9 @@ func (w *window) processMouseClicked(button desktop.MouseButton, action action, 
 				prevOverlay := w.canvas.Overlays().Top()
 				secondary.TappedSecondary(ev)
 
-				// if the secondary tap dismissed an overlay, forward the event to the widget underneath
-				if prevOverlay != nil && w.canvas.Overlays().Top() != prevOverlay {
+				// if the secondary tap dismissed an overlay (rather than opening a new
+				// one on top), forward the event to the widget underneath
+				if prevOverlay != nil && !slices.Contains(w.canvas.Overlays().List(), prevOverlay) {
 					co2, pos2, _ := w.findObjectAtPositionMatching(w.canvas, mousePos, func(object fyne.CanvasObject) bool {
 						_, ok := object.(fyne.SecondaryTappable)
 						return ok
@@ -567,6 +591,13 @@ func (w *window) processMouseClicked(button desktop.MouseButton, action action, 
 	// Check for double click/tap on left mouse button
 	if action == release && button == desktop.MouseButtonPrimary && !mouseDragStarted {
 		w.mouseClickedHandleTapDoubleTap(co, ev)
+	}
+}
+
+func (w *window) ensurePositionProcessed() {
+	if !w.mousePosUpdateProcessed {
+		w.processMouseMoved(w.newMousePosX, w.newMousePosY)
+		w.mousePosUpdateProcessed = true
 	}
 }
 
@@ -767,6 +798,10 @@ func (w *window) processFocused(focus bool) {
 		}
 		curWindow = w
 		w.canvas.FocusGained()
+
+		if build.HasNativeMenu {
+			setupNativeMenu(w, w.mainmenu)
+		}
 
 		if build.IsWayland {
 			w.frame.markReady()
@@ -982,7 +1017,9 @@ func (d *gLDriver) createWindow(title string, decorate bool) fyne.Window {
 
 	d.init()
 
-	ret = &window{title: title, decorate: decorate, driver: d}
+	// A window starts with no mouse move outstanding: the zero value would read
+	// as one pending at (0,0), which the first click would then apply.
+	ret = &window{title: title, decorate: decorate, driver: d, mousePosUpdateProcessed: true}
 	ret.frame = newPresentGate(ret)
 	ret.canvas = newCanvas()
 	ret.canvas.context = ret

@@ -3,11 +3,13 @@ package widget
 import (
 	"math"
 	"strconv"
+	"sync"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/driver/mobile"
+	"fyne.io/fyne/v2/internal"
 	"fyne.io/fyne/v2/internal/async"
 	"fyne.io/fyne/v2/internal/widget"
 	"fyne.io/fyne/v2/theme"
@@ -114,6 +116,13 @@ type Table struct {
 	top, left, corner, dividerLayer                              *clip
 	hoverHeaderRow, hoverHeaderCol, dragCol, dragRow             int
 	dragStartPos                                                 fyne.Position
+
+	// Добавляем поля для отслеживания размеров и синхронизации
+	propertyLock sync.RWMutex // блокировка для безопасного доступа
+	rowCount     int          // текущее количество строк
+	colCount     int          // текущее количество столбцов
+	rowHeight    float32      // высота строки
+	visibleRows  int          // количество видимых строк
 }
 
 // NewTable returns a new performant table widget defined by the passed functions.
@@ -159,6 +168,7 @@ func (t *Table) CreateRenderer() fyne.WidgetRenderer {
 		}
 	}
 	t.cellSize = t.templateSize()
+	t.updateMetrics()
 	t.cells = newTableCells(t)
 	t.content = widget.NewScroll(t.cells)
 	t.top = newClip(t, &fyne.Container{})
@@ -850,7 +860,7 @@ func (t *Table) templateSize() fyne.Size {
 		if !t.ShowHeaderRow && !t.ShowHeaderColumn {
 			return template.MinSize()
 		}
-		return template.MinSize().Max(t.createHeader().MinSize())
+		return internal.MaxSizes(template.MinSize(), t.createHeader().MinSize())
 	}
 
 	fyne.LogError("Missing CreateCell callback required for Table", nil)
@@ -1118,7 +1128,7 @@ func (t *tableRenderer) Layout(s fyne.Size) {
 
 func (t *tableRenderer) MinSize() fyne.Size {
 	sep := t.t.Theme().Size(theme.SizeNamePadding)
-	min := t.t.content.MinSize().Max(t.t.cellSize)
+	min := internal.MaxSizes(t.t.content.MinSize(), t.t.cellSize)
 	if t.t.ShowHeaderRow {
 		min.Height += t.t.headerSize.Height + sep
 	}
@@ -1164,6 +1174,7 @@ func (t *tableRenderer) Refresh() {
 	t.t.cellSize = t.t.templateSize()
 	t.calculateHeaderSizes(th)
 
+	t.t.updateMetrics()
 	t.Layout(t.t.Size())
 	t.t.cells.Refresh()
 }
@@ -1795,4 +1806,38 @@ func (c *clip) DragEnd() {
 
 func (c *clip) Dragged(e *fyne.DragEvent) {
 	c.t.Dragged(e)
+}
+
+// updateMetrics recalculates internal metrics for RefreshRow.
+func (t *Table) updateMetrics() {
+	t.propertyLock.Lock()
+	defer t.propertyLock.Unlock()
+	if t.Length != nil {
+		t.rowCount, t.colCount = t.Length()
+	}
+	t.rowHeight = t.cellSize.Height
+	padding := t.Theme().Size(theme.SizeNamePadding)
+	t.visibleRows = int(math.Ceil(float64(t.Size().Height) / float64(t.rowHeight+padding)))
+}
+
+// RefreshRow refreshes the specified row without full table redraw.
+func (t *Table) RefreshRow(row int) {
+	t.propertyLock.RLock()
+	defer t.propertyLock.RUnlock()
+
+	if row < 0 || row >= t.rowCount {
+		return
+	}
+
+	firstRow := int(t.offset.Y / t.rowHeight)
+	lastRow := firstRow + t.visibleRows
+
+	if row < firstRow || row > lastRow {
+		return
+	}
+
+	// fmt.Println("RefreshRow called for row", row)
+	for col := 0; col < t.colCount; col++ {
+		t.RefreshItem(TableCellID{Row: row, Col: col})
+	}
 }
