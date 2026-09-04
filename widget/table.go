@@ -1841,3 +1841,9 @@ func (t *Table) RefreshRow(row int) {
 		t.RefreshItem(TableCellID{Row: row, Col: col})
 	}
 }
+
+// Refresh overrides BaseWidget.Refresh to ensure metrics are updated before redraw.
+func (t *Table) Refresh() {
+	t.updateMetrics() // обновляем rowCount, colCount, visibleRows
+	t.BaseWidget.Refresh()
+}

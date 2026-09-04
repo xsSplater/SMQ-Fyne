@@ -112,14 +112,14 @@ func (m *Manager) showPopUp(text string, pos fyne.Position) {
 
 	// Создаём PopUp с небольшими внешними отступами
 	popUp := widget.NewPopUp(content, m.canvas)
-	popUp.Modal = false
+	popUp.SetModal(false)
 	popUpSize := fyne.NewSize(width+outerPadding*2, height+outerPadding*2)
 	popUp.Resize(popUpSize)
 
 	// Позиционируем с учётом границ экрана
 	winSize := m.canvas.Size()
-	x := pos.X // + 10
-	y := pos.Y // + 10
+	x := pos.X + 20 // + 10 по горизонтали
+	y := pos.Y + 15 // + 10 по вертикали
 	if x+popUpSize.Width > winSize.Width {
 		x = winSize.Width - popUpSize.Width - 5
 	}
